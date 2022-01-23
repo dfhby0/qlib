@@ -6,7 +6,7 @@ Motivation of index_data
     Some users just want a simple numpy dataframe with indices and don't want such a complicated tools.
     Such users are the target of `index_data`
 
-`index_data` try to behave like pandas (some API will be different because we try to be simpler and more intuitive) but don't compromize the performance. It provides the basic numpy data and simple indexing feature. If users call APIs which may compromize the performance, index_data will raise Errors.
+`index_data` try to behave like pandas (some API will be different because we try to be simpler and more intuitive) but don't compromise the performance. It provides the basic numpy data and simple indexing feature. If users call APIs which may compromise the performance, index_data will raise Errors.
 """
 
 from typing import Dict, Tuple, Union, Callable, List
@@ -401,6 +401,10 @@ class IndexData(metaclass=index_data_ops_creator):
     def columns(self):
         return self.indices[1]
 
+    def __getitem__(self, args):
+        # NOTE: this tries to behave like a numpy array to be compatible with numpy aggregating function like nansum and nanmean
+        return self.iloc[args]
+
     def _align_indices(self, other: "IndexData") -> "IndexData":
         """
         Align all indices of `other` to `self` before performing the arithmetic operations.
@@ -409,7 +413,7 @@ class IndexData(metaclass=index_data_ops_creator):
         Parameters
         ----------
         other : "IndexData"
-            the index in `other` is to be chagned
+            the index in `other` is to be changed
 
         Returns
         -------
@@ -455,7 +459,8 @@ class IndexData(metaclass=index_data_ops_creator):
         """
         return len(self.data)
 
-    def sum(self, axis=None):
+    def sum(self, axis=None, dtype=None, out=None):
+        assert out is None and dtype is None, "`out` is just for compatible with numpy's aggregating function"
         # FIXME: weird logic and not general
         if axis is None:
             return np.nansum(self.data)
@@ -468,7 +473,8 @@ class IndexData(metaclass=index_data_ops_creator):
         else:
             raise ValueError(f"axis must be None, 0 or 1")
 
-    def mean(self, axis=None):
+    def mean(self, axis=None, dtype=None, out=None):
+        assert out is None and dtype is None, "`out` is just for compatible with numpy's aggregating function"
         # FIXME: weird logic and not general
         if axis is None:
             return np.nanmean(self.data)

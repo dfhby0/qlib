@@ -2,8 +2,7 @@
 # Licensed under the MIT License.
 from pathlib import Path
 
-_version_path = Path(__file__).absolute().parent / "VERSION.txt"  # This file is copyed from setup.py
-__version__ = _version_path.read_text(encoding="utf-8").strip()
+__version__ = "0.8.3.99"
 __version__bak = __version__  # This version is backup for QlibConfig.reset_qlib_version
 import os
 from typing import Union
@@ -13,9 +12,24 @@ import platform
 import subprocess
 from .log import get_module_logger
 
-
 # init qlib
 def init(default_conf="client", **kwargs):
+    """
+
+    Parameters
+    ----------
+    default_conf: str
+        the default value is client. Accepted values: client/server.
+    **kwargs :
+        clear_mem_cache: str
+            the default value is True;
+            Will the memory cache be clear.
+            It is often used to improve performance when init will be called for multiple times
+        skip_if_reg: bool: str
+            the default value is True;
+            When using the recorder, skip_if_reg can set to True to avoid loss of recorder.
+
+    """
     from .config import C
     from .data.cache import H
 
@@ -29,7 +43,9 @@ def init(default_conf="client", **kwargs):
         logger.warning("Skip initialization because `skip_if_reg is True`")
         return
 
-    H.clear()
+    clear_mem_cache = kwargs.pop("clear_mem_cache", True)
+    if clear_mem_cache:
+        H.clear()
     C.set(default_conf, **kwargs)
 
     # mount nfs
@@ -46,7 +62,7 @@ def init(default_conf="client", **kwargs):
                 else:
                     logger.warning(f"auto_path is False, please make sure {mount_path} is mounted")
         elif uri_type == C.NFS_URI:
-            _mount_nfs_uri(provider_uri, mount_path, C["auto_mount"])
+            _mount_nfs_uri(provider_uri, C.dpm.get_data_uri(_freq), C["auto_mount"])
         else:
             raise NotImplementedError(f"This type of URI is not supported")
 
@@ -79,7 +95,7 @@ def _mount_nfs_uri(provider_uri, mount_path, auto_mount: bool = False):
         sys_type = platform.system()
         if "win" in sys_type.lower():
             # system: window
-            exec_result = os.popen("mount -o anon %s %s" % (provider_uri, mount_path + ":"))
+            exec_result = os.popen(f"mount -o anon {provider_uri} {mount_path}")
             result = exec_result.read()
             if "85" in result:
                 LOG.warning(f"{provider_uri} on Windows:{mount_path} is already mounted")
@@ -152,8 +168,11 @@ def init_from_yaml_conf(conf_path, **kwargs):
     :param conf_path: A path to the qlib config in yml format
     """
 
-    with open(conf_path) as f:
-        config = yaml.safe_load(f)
+    if conf_path is None:
+        config = {}
+    else:
+        with open(conf_path) as f:
+            config = yaml.safe_load(f)
     config.update(kwargs)
     default_conf = config.pop("default_conf", "client")
     init(default_conf, **config)
@@ -166,7 +185,7 @@ def get_project_path(config_name="config.yaml", cur_path: Union[Path, str, None]
     - There is a file named `config.yaml` in qlib.
 
     For example:
-        If your project file system stucuture follows such a pattern
+        If your project file system structure follows such a pattern
 
             <project_path>/
               - config.yaml
@@ -211,12 +230,12 @@ def auto_init(**kwargs):
     Here are two examples of the configuration
 
     Example 1)
-    If you want create a new project-specific config based on a shared configure, you can use  `conf_type: ref`
+    If you want to create a new project-specific config based on a shared configure, you can use  `conf_type: ref`
 
     .. code-block:: yaml
 
         conf_type: ref
-        qlib_cfg: '<shared_yaml_config_path>'
+        qlib_cfg: '<shared_yaml_config_path>'    # this could be null reference no config from other files
         # following configs in `qlib_cfg_update` is project=specific
         qlib_cfg_update:
             exp_manager:
@@ -227,7 +246,7 @@ def auto_init(**kwargs):
                     default_exp_name: "Experiment"
 
     Example 2)
-    If you wan to create simple a stand alone config, you can use following config(a.k.a `conf_type: origin`)
+    If you want to create simple a standalone config, you can use following config(a.k.a. `conf_type: origin`)
 
     .. code-block:: python
 
@@ -246,6 +265,7 @@ def auto_init(**kwargs):
     except FileNotFoundError:
         init(**kwargs)
     else:
+        logger = get_module_logger("Initialization")
         conf_pp = pp / "config.yaml"
         with conf_pp.open() as f:
             conf = yaml.safe_load(f)
@@ -256,11 +276,17 @@ def auto_init(**kwargs):
             init_from_yaml_conf(conf_pp, **kwargs)
         elif conf_type == "ref":
             # This config type will be more convenient in following scenario
-            # - There is a shared configure file and you don't want to edit it inplace.
-            # - The shared configure may be updated later and you don't want to copy it.
+            # - There is a shared configure file, and you don't want to edit it inplace.
+            # - The shared configure may be updated later, and you don't want to copy it.
             # - You have some customized config.
-            qlib_conf_path = conf["qlib_cfg"]
-            qlib_conf_update = conf.get("qlib_cfg_update")
-            init_from_yaml_conf(qlib_conf_path, **qlib_conf_update, **kwargs)
-        logger = get_module_logger("Initialization")
+            qlib_conf_path = conf.get("qlib_cfg", None)
+
+            # merge the arguments
+            qlib_conf_update = conf.get("qlib_cfg_update", {})
+            for k, v in kwargs.items():
+                if k in qlib_conf_update:
+                    logger.warning(f"`qlib_conf_update` from conf_pp is override by `kwargs` on key '{k}'")
+            qlib_conf_update.update(kwargs)
+
+            init_from_yaml_conf(qlib_conf_path, **qlib_conf_update)
         logger.info(f"Auto load project config: {conf_pp}")

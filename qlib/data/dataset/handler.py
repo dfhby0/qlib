@@ -70,7 +70,7 @@ class DataHandler(Serializable):
         Parameters
         ----------
         instruments :
-            The stock list to retrive.
+            The stock list to retrieve.
         start_time :
             start_time of the original data.
         end_time :
@@ -82,8 +82,6 @@ class DataHandler(Serializable):
         fetch_orig : bool
             Return the original data instead of copy if possible.
         """
-        # Set logger
-        self.logger = get_module_logger("DataHandler")
 
         # Setup data loader
         assert data_loader is not None  # to make start_time end_time could have None default value
@@ -156,7 +154,7 @@ class DataHandler(Serializable):
 
     def fetch(
         self,
-        selector: Union[pd.Timestamp, slice, str] = slice(None, None),
+        selector: Union[pd.Timestamp, slice, str, pd.Index] = slice(None, None),
         level: Union[str, int] = "datetime",
         col_set: Union[str, List[str]] = CS_ALL,
         squeeze: bool = False,
@@ -169,13 +167,24 @@ class DataHandler(Serializable):
         ----------
         selector : Union[pd.Timestamp, slice, str]
             describe how to select data by index
+            It can be categories as following
+            - fetch single index
+            - fetch a range of index
+                - a slice range
+                - pd.Index for specific indexes
+
+            Following conflictions may occurs
+            - Does [20200101", "20210101"] mean selecting this slice or these two days?
+                - slice have higher priorities
+
         level : Union[str, int]
             which index level to select the data
+
         col_set : Union[str, List[str]]
 
             - if isinstance(col_set, str):
 
-                select a set of meaningful columns.(e.g. features, columns)
+                select a set of meaningful, pd.Index columns.(e.g. features, columns)
 
                 if col_set == CS_RAW:
                     the raw dataset will be returned.
@@ -183,6 +192,7 @@ class DataHandler(Serializable):
             - if isinstance(col_set, List[str]):
 
                 select several sets of meaningful columns, the returned data has multiple levels
+
         proc_func: Callable
             - Give a hook for processing data before fetching
             - An example to explain the necessity of the hook:
@@ -199,9 +209,39 @@ class DataHandler(Serializable):
         -------
         pd.DataFrame.
         """
+        return self._fetch_data(
+            data_storage=self._data,
+            selector=selector,
+            level=level,
+            col_set=col_set,
+            squeeze=squeeze,
+            proc_func=proc_func,
+        )
+
+    def _fetch_data(
+        self,
+        data_storage,
+        selector: Union[pd.Timestamp, slice, str, pd.Index] = slice(None, None),
+        level: Union[str, int] = "datetime",
+        col_set: Union[str, List[str]] = CS_ALL,
+        squeeze: bool = False,
+        proc_func: Callable = None,
+    ):
+        # This method is extracted for sharing in subclasses
         from .storage import BaseHandlerStorage
 
-        data_storage = self._data
+        # Following conflictions may occurs
+        # - Does [20200101", "20210101"] mean selecting this slice or these two days?
+        # To solve this issue
+        #   - slice have higher priorities (except when level is none)
+        if isinstance(selector, (tuple, list)) and level is not None:
+            # when level is None, the argument will be passed in directly
+            # we don't have to convert it into slice
+            try:
+                selector = slice(*selector)
+            except ValueError:
+                get_module_logger("DataHandlerLP").info(f"Fail to converting to query to slice. It will used directly")
+
         if isinstance(data_storage, pd.DataFrame):
             data_df = data_storage
             if proc_func is not None:
@@ -302,6 +342,7 @@ class DataHandlerLP(DataHandler):
     DK_R = "raw"
     DK_I = "infer"
     DK_L = "learn"
+    ATTR_MAP = {DK_R: "_data", DK_I: "_infer", DK_L: "_learn"}
 
     # process type
     PTYPE_I = "independent"
@@ -543,7 +584,7 @@ class DataHandlerLP(DataHandler):
             raise AttributeError(
                 "DataHandlerLP has not attribute _data, please set drop_raw = False if you want to use raw data"
             )
-        df = getattr(self, {self.DK_R: "_data", self.DK_I: "_infer", self.DK_L: "_learn"}[data_key])
+        df = getattr(self, self.ATTR_MAP[data_key])
         return df
 
     def fetch(
@@ -552,6 +593,7 @@ class DataHandlerLP(DataHandler):
         level: Union[str, int] = "datetime",
         col_set=DataHandler.CS_ALL,
         data_key: str = DK_I,
+        squeeze: bool = False,
         proc_func: Callable = None,
     ) -> pd.DataFrame:
         """
@@ -576,34 +618,14 @@ class DataHandlerLP(DataHandler):
         """
         from .storage import BaseHandlerStorage
 
-        data_storage = self._get_df_by_key(data_key)
-        if isinstance(data_storage, pd.DataFrame):
-            data_df = data_storage
-            if proc_func is not None:
-                # FIXME: fetch by time first will be more friendly to proc_func
-                # Copy incase of `proc_func` changing the data inplace....
-                data_df = proc_func(fetch_df_by_index(data_df, selector, level, fetch_orig=self.fetch_orig).copy())
-                data_df = fetch_df_by_col(data_df, col_set)
-            else:
-                # Fetch column  first will be more friendly to SepDataFrame
-                data_df = fetch_df_by_col(data_df, col_set)
-                data_df = fetch_df_by_index(data_df, selector, level, fetch_orig=self.fetch_orig)
-
-        elif isinstance(data_storage, BaseHandlerStorage):
-            if not data_storage.is_proc_func_supported():
-                if proc_func is not None:
-                    raise ValueError(f"proc_func is not supported by the storage {type(data_storage)}")
-                data_df = data_storage.fetch(
-                    selector=selector, level=level, col_set=col_set, fetch_orig=self.fetch_orig
-                )
-            else:
-                data_df = data_storage.fetch(
-                    selector=selector, level=level, col_set=col_set, fetch_orig=self.fetch_orig, proc_func=proc_func
-                )
-        else:
-            raise TypeError(f"data_storage should be pd.DataFrame|HasingStockStorage, not {type(data_storage)}")
-
-        return data_df
+        return self._fetch_data(
+            data_storage=self._get_df_by_key(data_key),
+            selector=selector,
+            level=level,
+            col_set=col_set,
+            squeeze=squeeze,
+            proc_func=proc_func,
+        )
 
     def get_cols(self, col_set=DataHandler.CS_ALL, data_key: str = DK_I) -> list:
         """
@@ -624,3 +646,33 @@ class DataHandlerLP(DataHandler):
         df = self._get_df_by_key(data_key).head()
         df = fetch_df_by_col(df, col_set)
         return df.columns.to_list()
+
+    @classmethod
+    def cast(cls, handler: "DataHandlerLP") -> "DataHandlerLP":
+        """
+        Motivation
+        - A user create a datahandler in his customized package. Then he want to share the processed handler to other users without introduce the package dependency and complicated data processing logic.
+        - This class make it possible by casting the class to DataHandlerLP and only keep the processed data
+
+        Parameters
+        ----------
+        handler : DataHandlerLP
+            A subclass of DataHandlerLP
+
+        Returns
+        -------
+        DataHandlerLP:
+            the converted processed data
+        """
+        new_hd: DataHandlerLP = object.__new__(DataHandlerLP)
+        new_hd.from_cast = True  # add a mark for the casted instance
+
+        for key in list(DataHandlerLP.ATTR_MAP.values()) + [
+            "instruments",
+            "start_time",
+            "end_time",
+            "fetch_orig",
+            "drop_raw",
+        ]:
+            setattr(new_hd, key, getattr(handler, key, None))
+        return new_hd

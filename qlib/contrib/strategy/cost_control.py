@@ -6,7 +6,7 @@ This strategy is not well maintained
 
 
 from .order_generator import OrderGenWInteract
-from .model_strategy import WeightStrategyBase
+from .signal_strategy import WeightStrategyBase
 import copy
 
 
@@ -47,7 +47,7 @@ class SoftTopkStrategy(WeightStrategyBase):
         Return the proportion of your total value you will used in investment.
         Dynamically risk_degree will result in Market timing
         """
-        # It will use 95% amoutn of your total value by default
+        # It will use 95% amount of your total value by default
         return self.risk_degree
 
     def generate_target_weight_position(self, score, current, trade_start_time, trade_end_time):

@@ -4,8 +4,7 @@
 
 # Base exception class
 class QlibException(Exception):
-    def __init__(self, message):
-        super(QlibException, self).__init__(message)
+    pass
 
 
 class RecorderInitializationError(QlibException):
@@ -16,5 +15,11 @@ class RecorderInitializationError(QlibException):
 
 class LoadObjectError(QlibException):
     """Error type for Recorder when can not load object"""
+
+    pass
+
+
+class ExpAlreadyExistError(Exception):
+    """Experiment already exists"""
 
     pass

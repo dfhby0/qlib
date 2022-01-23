@@ -16,14 +16,54 @@ import time
 import re
 from typing import Callable, List
 
+from tqdm.auto import tqdm
 from qlib.data.dataset import Dataset
 from qlib.log import get_module_logger
 from qlib.model.base import Model
-from qlib.utils import flatten_dict, get_callable_kwargs, init_instance_by_config
+from qlib.utils import flatten_dict, get_callable_kwargs, init_instance_by_config, auto_filter_kwargs, fill_placeholder
 from qlib.workflow import R
 from qlib.workflow.record_temp import SignalRecord
 from qlib.workflow.recorder import Recorder
 from qlib.workflow.task.manage import TaskManager, run_task
+from qlib.data.dataset.weight import Reweighter
+
+
+def _log_task_info(task_config: dict):
+    R.log_params(**flatten_dict(task_config))
+    R.save_objects(**{"task": task_config})  # keep the original format and datatype
+    R.set_tags(**{"hostname": socket.gethostname()})
+
+
+def _exe_task(task_config: dict):
+    rec = R.get_recorder()
+    # model & dataset initiation
+    model: Model = init_instance_by_config(task_config["model"], accept_types=Model)
+    dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)
+    reweighter: Reweighter = task_config.get("reweighter", None)
+    # model training
+    auto_filter_kwargs(model.fit)(dataset, reweighter=reweighter)
+    R.save_objects(**{"params.pkl": model})
+    # this dataset is saved for online inference. So the concrete data should not be dumped
+    dataset.config(dump_all=False, recursive=True)
+    R.save_objects(**{"dataset": dataset})
+    # fill placehorder
+    placehorder_value = {"<MODEL>": model, "<DATASET>": dataset}
+    task_config = fill_placeholder(task_config, placehorder_value)
+    # generate records: prediction, backtest, and analysis
+    records = task_config.get("record", [])
+    if isinstance(records, dict):  # prevent only one dict
+        records = [records]
+    for record in records:
+        # Some recorder require the parameter `model` and `dataset`.
+        # try to automatically pass in them to the initialization function
+        # to make defining the tasking easier
+        r = init_instance_by_config(
+            record,
+            recorder=rec,
+            default_module="qlib.workflow.record_temp",
+            try_kwargs={"model": model, "dataset": dataset},
+        )
+        r.generate()
 
 
 def begin_task_train(task_config: dict, experiment_name: str, recorder_name: str = None) -> Recorder:
@@ -39,52 +79,8 @@ def begin_task_train(task_config: dict, experiment_name: str, recorder_name: str
         Recorder: the model recorder
     """
     with R.start(experiment_name=experiment_name, recorder_name=recorder_name):
-        R.log_params(**flatten_dict(task_config))
-        R.save_objects(**{"task": task_config})  # keep the original format and datatype
-        R.set_tags(**{"hostname": socket.gethostname()})
-        recorder: Recorder = R.get_recorder()
-    return recorder
-
-
-def fill_placeholder(config: dict, config_extend: dict):
-    """
-    Detect placeholder in config and fill them with config_extend.
-    The item of dict must be single item(int, str, etc), dict and list. Tuples are not supported.
-
-    Parameters
-    ----------
-    config : dict
-        the parameter dict will be filled
-    config_extend : dict
-        the value of all placeholders
-
-    Returns
-    -------
-    dict
-        the parameter dict
-    """
-    # check the format of config_extend
-    for placeholder in config_extend.keys():
-        assert re.match(r"<[^<>]+>", placeholder)
-
-    # bfs
-    top = 0
-    tail = 1
-    item_queue = [config]
-    while top < tail:
-        now_item = item_queue[top]
-        top += 1
-        if isinstance(now_item, list):
-            item_keys = range(len(now_item))
-        elif isinstance(now_item, dict):
-            item_keys = now_item.keys()
-        for key in item_keys:
-            if isinstance(now_item[key], list) or isinstance(now_item[key], dict):
-                item_queue.append(now_item[key])
-                tail += 1
-            elif isinstance(now_item[key], str) and now_item[key] in config_extend.keys():
-                now_item[key] = config_extend[now_item[key]]
-    return config
+        _log_task_info(task_config)
+        return R.get_recorder()
 
 
 def end_task_train(rec: Recorder, experiment_name: str) -> Recorder:
@@ -100,38 +96,11 @@ def end_task_train(rec: Recorder, experiment_name: str) -> Recorder:
     """
     with R.start(experiment_name=experiment_name, recorder_id=rec.info["id"], resume=True):
         task_config = R.load_object("task")
-        # model & dataset initiation
-        model: Model = init_instance_by_config(task_config["model"])
-        dataset: Dataset = init_instance_by_config(task_config["dataset"])
-        # model training
-        model.fit(dataset)
-        R.save_objects(**{"params.pkl": model})
-        # this dataset is saved for online inference. So the concrete data should not be dumped
-        dataset.config(dump_all=False, recursive=True)
-        R.save_objects(**{"dataset": dataset})
-        # fill placehorder
-        placehorder_value = {"<MODEL>": model, "<DATASET>": dataset}
-        task_config = fill_placeholder(task_config, placehorder_value)
-        # generate records: prediction, backtest, and analysis
-        records = task_config.get("record", [])
-        if isinstance(records, dict):  # uniform the data format to list
-            records = [records]
-
-        for record in records:
-            # Some recorder require the parameter `model` and `dataset`.
-            # try to automatically pass in them to the initialization function
-            # to make defining the tasking easier
-            r = init_instance_by_config(
-                record,
-                recorder=rec,
-                default_module="qlib.workflow.record_temp",
-                try_kwargs={"model": model, "dataset": dataset},
-            )
-            r.generate()
+        _exe_task(task_config)
     return rec
 
 
-def task_train(task_config: dict, experiment_name: str) -> Recorder:
+def task_train(task_config: dict, experiment_name: str, recorder_name: str = None) -> Recorder:
     """
     Task based training, will be divided into two steps.
 
@@ -141,14 +110,17 @@ def task_train(task_config: dict, experiment_name: str) -> Recorder:
         The config of a task.
     experiment_name: str
         The name of experiment
+    recorder_name: str
+        The name of recorder
 
     Returns
     ----------
     Recorder: The instance of the recorder
     """
-    recorder = begin_task_train(task_config, experiment_name)
-    recorder = end_task_train(recorder, experiment_name)
-    return recorder
+    with R.start(experiment_name=experiment_name, recorder_name=recorder_name):
+        _log_task_info(task_config)
+        _exe_task(task_config)
+        return R.get_recorder()
 
 
 class Trainer:
@@ -204,6 +176,30 @@ class Trainer:
     def __call__(self, *args, **kwargs) -> list:
         return self.end_train(self.train(*args, **kwargs))
 
+    def has_worker(self) -> bool:
+        """
+        Some trainer has backend worker to support parallel training
+        This method can tell if the worker is enabled.
+
+        Returns
+        -------
+        bool:
+            if the worker is enabled
+
+        """
+        return False
+
+    def worker(self):
+        """
+        start the worker
+
+        Raises
+        ------
+        NotImplementedError:
+            If the worker is not supported
+        """
+        raise NotImplementedError(f"Please implement the `worker` method")
+
 
 class TrainerR(Trainer):
     """
@@ -252,27 +248,27 @@ class TrainerR(Trainer):
         if experiment_name is None:
             experiment_name = self.experiment_name
         recs = []
-        for task in tasks:
+        for task in tqdm(tasks, desc="train tasks"):
             rec = train_func(task, experiment_name, **kwargs)
             rec.set_tags(**{self.STATUS_KEY: self.STATUS_BEGIN})
             recs.append(rec)
         return recs
 
-    def end_train(self, recs: list, **kwargs) -> List[Recorder]:
+    def end_train(self, models: list, **kwargs) -> List[Recorder]:
         """
         Set STATUS_END tag to the recorders.
 
         Args:
-            recs (list): a list of trained recorders.
+            models (list): a list of trained recorders.
 
         Returns:
             List[Recorder]: the same list as the param.
         """
-        if isinstance(recs, Recorder):
-            recs = [recs]
-        for rec in recs:
+        if isinstance(models, Recorder):
+            models = [models]
+        for rec in models:
             rec.set_tags(**{self.STATUS_KEY: self.STATUS_END})
-        return recs
+        return models
 
 
 class DelayTrainerR(TrainerR):
@@ -293,13 +289,13 @@ class DelayTrainerR(TrainerR):
         self.end_train_func = end_train_func
         self.delay = True
 
-    def end_train(self, recs, end_train_func=None, experiment_name: str = None, **kwargs) -> List[Recorder]:
+    def end_train(self, models, end_train_func=None, experiment_name: str = None, **kwargs) -> List[Recorder]:
         """
         Given a list of Recorder and return a list of trained Recorder.
         This class will finish real data loading and model fitting.
 
         Args:
-            recs (list): a list of Recorder, the tasks have been saved to them
+            models (list): a list of Recorder, the tasks have been saved to them
             end_train_func (Callable, optional): the end_train method which needs at least `recorder`s and `experiment_name`. Defaults to None for using self.end_train_func.
             experiment_name (str): the experiment name, None for use default name.
             kwargs: the params for end_train_func.
@@ -307,18 +303,18 @@ class DelayTrainerR(TrainerR):
         Returns:
             List[Recorder]: a list of Recorders
         """
-        if isinstance(recs, Recorder):
-            recs = [recs]
+        if isinstance(models, Recorder):
+            models = [models]
         if end_train_func is None:
             end_train_func = self.end_train_func
         if experiment_name is None:
             experiment_name = self.experiment_name
-        for rec in recs:
+        for rec in models:
             if rec.list_tags()[self.STATUS_KEY] == self.STATUS_END:
                 continue
             end_train_func(rec, experiment_name, **kwargs)
             rec.set_tags(**{self.STATUS_KEY: self.STATUS_END})
-        return recs
+        return models
 
 
 class TrainerRM(Trainer):
@@ -457,6 +453,9 @@ class TrainerRM(Trainer):
             task_pool = experiment_name
         run_task(train_func, task_pool=task_pool, experiment_name=experiment_name)
 
+    def has_worker(self) -> bool:
+        return True
+
 
 class DelayTrainerRM(TrainerRM):
     """
@@ -506,13 +505,17 @@ class DelayTrainerRM(TrainerRM):
             tasks = [tasks]
         if len(tasks) == 0:
             return []
-        return super().train(
+        _skip_run_task = self.skip_run_task
+        self.skip_run_task = False  # The task preparation can't be skipped
+        res = super().train(
             tasks,
             train_func=train_func,
             experiment_name=experiment_name,
             after_status=TaskManager.STATUS_PART_DONE,
             **kwargs,
         )
+        self.skip_run_task = _skip_run_task
+        return res
 
     def end_train(self, recs, end_train_func=None, experiment_name: str = None, **kwargs) -> List[Recorder]:
         """
@@ -579,3 +582,6 @@ class DelayTrainerRM(TrainerRM):
             experiment_name=experiment_name,
             before_status=TaskManager.STATUS_PART_DONE,
         )
+
+    def has_worker(self) -> bool:
+        return True

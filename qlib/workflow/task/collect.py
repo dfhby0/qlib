@@ -5,10 +5,14 @@
 Collector module can collect objects from everywhere and process them such as merging, grouping, averaging and so on.
 """
 
-from typing import Callable, Dict, List
+from collections import defaultdict
+from qlib.log import TimeInspector
+from typing import Callable, Dict, Iterable, List
 from qlib.log import get_module_logger
 from qlib.utils.serial import Serializable
 from qlib.workflow import R
+from qlib.workflow.exp import Experiment
+from qlib.workflow.recorder import Recorder
 
 
 class Collector(Serializable):
@@ -140,22 +144,27 @@ class RecorderCollector(Collector):
         artifacts_path={"pred": "pred.pkl"},
         artifacts_key=None,
         list_kwargs={},
+        status: Iterable = {Recorder.STATUS_FI},
     ):
         """
         Init RecorderCollector.
 
         Args:
-            experiment (Experiment or str): an instance of an Experiment or the name of an Experiment
+            experiment:
+                (Experiment or str): an instance of an Experiment or the name of an Experiment
+                (Callable): an callable function, which returns a list of experiments
             process_list (list or Callable): the list of processors or the instance of a processor to process dict.
             rec_key_func (Callable): a function to get the key of a recorder. If None, use recorder id.
             rec_filter_func (Callable, optional): filter the recorder by return True or False. Defaults to None.
             artifacts_path (dict, optional): The artifacts name and its path in Recorder. Defaults to {"pred": "pred.pkl", "IC": "sig_analysis/ic.pkl"}.
             artifacts_key (str or List, optional): the artifacts key you want to get. If None, get all artifacts.
             list_kwargs (str): arguments for list_recorders function.
+            status (Iterable): only collect recorders with specific status. None indicating collecting all the recorders
         """
         super().__init__(process_list=process_list)
         if isinstance(experiment, str):
             experiment = R.get_exp(experiment_name=experiment)
+        assert isinstance(experiment, (Experiment, Callable))
         self.experiment = experiment
         self.artifacts_path = artifacts_path
         if rec_key_func is None:
@@ -166,6 +175,7 @@ class RecorderCollector(Collector):
         self.artifacts_key = artifacts_key
         self.rec_filter_func = rec_filter_func
         self.list_kwargs = list_kwargs
+        self.status = status
 
     def collect(self, artifacts_key=None, rec_filter_func=None, only_exist=True) -> dict:
         """
@@ -190,14 +200,27 @@ class RecorderCollector(Collector):
 
         collect_dict = {}
         # filter records
-        recs = self.experiment.list_recorders(**self.list_kwargs)
-        recs_flt = {}
-        for rid, rec in recs.items():
-            if rec_filter_func is None or rec_filter_func(rec):
-                recs_flt[rid] = rec
+
+        if isinstance(self.experiment, Experiment):
+            with TimeInspector.logt("Time to `list_recorders` in RecorderCollector"):
+                recs = list(self.experiment.list_recorders(**self.list_kwargs).values())
+        elif isinstance(self.experiment, Callable):
+            recs = self.experiment()
+
+        recs = [
+            rec
+            for rec in recs
+            if (
+                (self.status is None or rec.status in self.status) and (rec_filter_func is None or rec_filter_func(rec))
+            )
+        ]
 
         logger = get_module_logger("RecorderCollector")
-        for _, rec in recs_flt.items():
+        status_stat = defaultdict(int)
+        for r in recs:
+            status_stat[r.status] += 1
+        logger.info(f"Nubmer of recorders after filter: {status_stat}")
+        for rec in recs:
             rec_key = self.rec_key_func(rec)
             for key in artifacts_key:
                 if self.ART_KEY_RAW == key:

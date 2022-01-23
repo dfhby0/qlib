@@ -19,6 +19,7 @@ from .pytorch_utils import count_parameters
 from ...model.base import Model
 from ...data.dataset import DatasetH
 from ...data.dataset.handler import DataHandlerLP
+from ...data.dataset.weight import Reweighter
 from ...utils import unpack_archive_with_buffer, save_multiple_parts_file, get_or_create_path
 from ...log import get_module_logger
 from ...workflow import R
@@ -26,7 +27,6 @@ from ...workflow import R
 
 class DNNModelPytorch(Model):
     """DNN Model
-
     Parameters
     ----------
     input_dim : int
@@ -97,7 +97,6 @@ class DNNModelPytorch(Model):
             "\nlr_decay_steps : {}"
             "\noptimizer : {}"
             "\nloss_type : {}"
-            "\neval_steps : {}"
             "\nseed : {}"
             "\ndevice : {}"
             "\nuse_GPU : {}"
@@ -112,7 +111,6 @@ class DNNModelPytorch(Model):
                 lr_decay_steps,
                 optimizer,
                 loss,
-                eval_steps,
                 seed,
                 self.device,
                 self.use_gpu,
@@ -166,18 +164,22 @@ class DNNModelPytorch(Model):
         evals_result=dict(),
         verbose=True,
         save_path=None,
+        reweighter=None,
     ):
         df_train, df_valid = dataset.prepare(
             ["train", "valid"], col_set=["feature", "label"], data_key=DataHandlerLP.DK_L
         )
         x_train, y_train = df_train["feature"], df_train["label"]
         x_valid, y_valid = df_valid["feature"], df_valid["label"]
-        try:
-            wdf_train, wdf_valid = dataset.prepare(["train", "valid"], col_set=["weight"], data_key=DataHandlerLP.DK_L)
-            w_train, w_valid = wdf_train["weight"], wdf_valid["weight"]
-        except KeyError as e:
+
+        if reweighter is None:
             w_train = pd.DataFrame(np.ones_like(y_train.values), index=y_train.index)
             w_valid = pd.DataFrame(np.ones_like(y_valid.values), index=y_valid.index)
+        elif isinstance(reweighter, Reweighter):
+            w_train = pd.DataFrame(reweighter.reweight(df_train))
+            w_valid = pd.DataFrame(reweighter.reweight(df_valid))
+        else:
+            raise ValueError("Unsupported reweighter type.")
 
         save_path = get_or_create_path(save_path)
         stop_steps = 0
@@ -199,7 +201,7 @@ class DNNModelPytorch(Model):
         y_val_auto = torch.from_numpy(y_valid.values).float().to(self.device)
         w_val_auto = torch.from_numpy(w_valid.values).float().to(self.device)
 
-        for step in range(self.max_steps):
+        for step in range(1, self.max_steps + 1):
             if stop_steps >= self.early_stop_rounds:
                 if verbose:
                     self.logger.info("\tearly stop")
@@ -223,7 +225,7 @@ class DNNModelPytorch(Model):
             # validation
             train_loss += loss.val
             # for evert `eval_steps` steps or at the last steps, we will evaluate the model.
-            if step % self.eval_steps == 0 or step + 1 == self.max_steps:
+            if step % self.eval_steps == 0 or step == self.max_steps:
                 stop_steps += 1
                 train_loss /= self.eval_steps
 
@@ -238,7 +240,7 @@ class DNNModelPytorch(Model):
                 R.log_metrics(val_loss=loss_val.val, step=step)
                 if verbose:
                     self.logger.info(
-                        "[Epoch {}]: train_loss {:.6f}, valid_loss {:.6f}".format(step, train_loss, loss_val.val)
+                        "[Step {}]: train_loss {:.6f}, valid_loss {:.6f}".format(step, train_loss, loss_val.val)
                     )
                 evals_result["train"].append(train_loss)
                 evals_result["valid"].append(loss_val.val)
@@ -257,7 +259,7 @@ class DNNModelPytorch(Model):
                 self.scheduler.step(cur_loss_val)
 
         # restore the optimal parameters after training
-        self.dnn_model.load_state_dict(torch.load(save_path))
+        self.dnn_model.load_state_dict(torch.load(save_path, map_location=self.device))
         if self.use_gpu:
             torch.cuda.empty_cache()
 
@@ -267,7 +269,7 @@ class DNNModelPytorch(Model):
             loss = torch.mul(sqr_loss, w).mean()
             return loss
         elif loss_type == "binary":
-            loss = nn.BCELoss(weight=w)
+            loss = nn.BCEWithLogitsLoss(weight=w)
             return loss(pred, target)
         else:
             raise NotImplementedError("loss {} is not supported!".format(loss_type))
@@ -296,7 +298,7 @@ class DNNModelPytorch(Model):
             ]
             _model_path = os.path.join(model_dir, _model_name)
             # Load model
-            self.dnn_model.load_state_dict(torch.load(_model_path))
+            self.dnn_model.load_state_dict(torch.load(_model_path, map_location=self.device))
         self.fitted = True
 
 
@@ -326,24 +328,16 @@ class Net(nn.Module):
         dnn_layers = []
         drop_input = nn.Dropout(0.05)
         dnn_layers.append(drop_input)
-        for i, (input_dim, hidden_units) in enumerate(zip(layers[:-1], layers[1:])):
-            fc = nn.Linear(input_dim, hidden_units)
+        for i, (_input_dim, hidden_units) in enumerate(zip(layers[:-1], layers[1:])):
+            fc = nn.Linear(_input_dim, hidden_units)
             activation = nn.LeakyReLU(negative_slope=0.1, inplace=False)
             bn = nn.BatchNorm1d(hidden_units)
             seq = nn.Sequential(fc, bn, activation)
             dnn_layers.append(seq)
         drop_input = nn.Dropout(0.05)
         dnn_layers.append(drop_input)
-        if loss == "mse":
-            fc = nn.Linear(hidden_units, output_dim)
-            dnn_layers.append(fc)
-
-        elif loss == "binary":
-            fc = nn.Linear(hidden_units, output_dim)
-            sigmoid = nn.Sigmoid()
-            dnn_layers.append(nn.Sequential(fc, sigmoid))
-        else:
-            raise NotImplementedError("loss {} is not supported!".format(loss))
+        fc = nn.Linear(hidden_units, output_dim)
+        dnn_layers.append(fc)
         # optimizer
         self.dnn_layers = nn.ModuleList(dnn_layers)
         self._weight_init()

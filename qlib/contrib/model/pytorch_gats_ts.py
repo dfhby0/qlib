@@ -73,7 +73,7 @@ class GATs(Model):
         base_model="GRU",
         model_path=None,
         optimizer="adam",
-        GPU="0",
+        GPU=0,
         n_jobs=10,
         seed=None,
         **kwargs
@@ -276,7 +276,7 @@ class GATs(Model):
 
         if self.model_path is not None:
             self.logger.info("Loading pretrained model...")
-            pretrained_model.load_state_dict(torch.load(self.model_path))
+            pretrained_model.load_state_dict(torch.load(self.model_path, map_location=self.device))
 
         model_dict = self.GAT_model.state_dict()
         pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}

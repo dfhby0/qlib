@@ -22,7 +22,7 @@ from dateutil.tz import tzlocal
 
 from qlib.tests.data import GetData
 from qlib.utils import code_to_fname, fname_to_code, exists_qlib_data
-from qlib.config import REG_CN as REGION_CN
+from qlib.constant import REG_CN as REGION_CN
 
 CUR_DIR = Path(__file__).resolve().parent
 sys.path.append(str(CUR_DIR.parent.parent))
@@ -601,11 +601,19 @@ class YahooNormalize1min(YahooNormalize, ABC):
             #   - Close price adjusted for splits. Adjusted close price adjusted for both dividends and splits.
             #   - data_1d.adjclose: Adjusted close price adjusted for both dividends and splits.
             #   - data_1d.close: `data_1d.adjclose / (close for the first trading day that is not np.nan)`
-            df["date_tmp"] = df[self._date_field_name].apply(lambda x: pd.Timestamp(x).date())
-            df.set_index("date_tmp", inplace=True)
-            df.loc[:, "factor"] = data_1d["close"] / df["close"]
-            df.loc[:, "paused"] = data_1d["paused"]
-            df.reset_index("date_tmp", drop=True, inplace=True)
+            def _calc_factor(df_1d: pd.DataFrame):
+                try:
+                    _date = pd.Timestamp(pd.Timestamp(df_1d[self._date_field_name].iloc[0]).date())
+                    df_1d["factor"] = (
+                        data_1d.loc[_date]["close"] / df_1d.loc[df_1d["close"].last_valid_index()]["close"]
+                    )
+                    df_1d["paused"] = data_1d.loc[_date]["paused"]
+                except Exception:
+                    df_1d["factor"] = np.nan
+                    df_1d["paused"] = np.nan
+                return df_1d
+
+            df = df.groupby([df[self._date_field_name].dt.date]).apply(_calc_factor)
 
             if self.CONSISTENT_1d:
                 # the date sequence is consistent with 1d
@@ -925,7 +933,7 @@ class Run(BaseRun):
         Examples
         ---------
             $ python collector.py normalize_data --source_dir ~/.qlib/stock_data/source --normalize_dir ~/.qlib/stock_data/normalize --region cn --interval 1d
-            $ python collector.py normalize_data --qlib_data_1d_dir ~/.qlib/qlib_data/cn_1d --source_dir ~/.qlib/stock_data/source_cn_1min --normalize_dir ~/.qlib/stock_data/normalize_cn_1min --region CN --interval 1min
+            $ python collector.py normalize_data --qlib_data_1d_dir ~/.qlib/qlib_data/cn_data --source_dir ~/.qlib/stock_data/source_cn_1min --normalize_dir ~/.qlib/stock_data/normalize_cn_1min --region CN --interval 1min
         """
         if self.interval.lower() == "1min":
             if qlib_data_1d_dir is None or not Path(qlib_data_1d_dir).expanduser().exists():
@@ -966,7 +974,7 @@ class Run(BaseRun):
 
         Examples
         ---------
-            $ python collector.py normalize_data_1d_extend --old_qlib_dir ~/.qlib/qlib_data/cn_1d --source_dir ~/.qlib/stock_data/source --normalize_dir ~/.qlib/stock_data/normalize --region CN --interval 1d
+            $ python collector.py normalize_data_1d_extend --old_qlib_dir ~/.qlib/qlib_data/cn_data --source_dir ~/.qlib/stock_data/source --normalize_dir ~/.qlib/stock_data/normalize --region CN --interval 1d
         """
         _class = getattr(self._cur_module, f"{self.normalize_class_name}Extend")
         yc = Normalize(

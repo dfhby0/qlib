@@ -4,7 +4,7 @@
 from urllib.parse import urlparse
 import mlflow
 from filelock import FileLock
-from mlflow.exceptions import MlflowException
+from mlflow.exceptions import MlflowException, RESOURCE_ALREADY_EXISTS, ErrorCode
 from mlflow.entities import ViewType
 import os, logging
 from pathlib import Path
@@ -15,8 +15,9 @@ from .exp import MLflowExperiment, Experiment
 from ..config import C
 from .recorder import Recorder
 from ..log import get_module_logger
+from ..utils.exceptions import ExpAlreadyExistError
 
-logger = get_module_logger("workflow", logging.INFO)
+logger = get_module_logger("workflow")
 
 
 class ExpManager:
@@ -94,13 +95,17 @@ class ExpManager:
         Returns
         -------
         An experiment object.
+
+        Raise
+        -----
+        ExpAlreadyExistError
         """
         raise NotImplementedError(f"Please implement the `create_exp` method.")
 
     def search_records(self, experiment_ids=None, **kwargs):
         """
         Get a pandas DataFrame of records that fit the search criteria of the experiment.
-        Inputs are the search critera user want to apply.
+        Inputs are the search criteria user want to apply.
 
         Returns
         -------
@@ -173,7 +178,7 @@ class ExpManager:
                 self._get_exp(experiment_id=experiment_id, experiment_name=experiment_name),
                 False,
             )
-        if is_new and start:
+        if self.active_experiment is None and start:
             self.active_experiment = exp
             # start the recorder
             self.active_experiment.start()
@@ -200,7 +205,14 @@ class ExpManager:
             if pr.scheme == "file":
                 with FileLock(os.path.join(pr.netloc, pr.path, "filelock")) as f:
                     return self.create_exp(experiment_name), True
-            return self.create_exp(experiment_name), True
+            # NOTE: for other schemes like http, we double check to avoid create exp conflicts
+            try:
+                return self.create_exp(experiment_name), True
+            except ExpAlreadyExistError:
+                return (
+                    self._get_exp(experiment_id=experiment_id, experiment_name=experiment_name),
+                    False,
+                )
 
     def _get_exp(self, experiment_id=None, experiment_name=None) -> Experiment:
         """
@@ -267,8 +279,9 @@ class ExpManager:
 
         """
         if uri is None:
-            logger.info("No tracking URI is provided. Use the default tracking URI.")
-            self._current_uri = self.default_uri
+            if self._current_uri is None:
+                logger.debug("No tracking URI is provided. Use the default tracking URI.")
+                self._current_uri = self.default_uri
         else:
             # Temporarily re-set the current uri as the uri argument.
             self._current_uri = uri
@@ -278,6 +291,7 @@ class ExpManager:
     def _set_uri(self):
         """
         Customized features for subclasses' set_uri function.
+        This method is designed for the underlying experiment backend storage.
         """
         raise NotImplementedError(f"Please implement the `_set_uri` method.")
 
@@ -345,10 +359,15 @@ class MLflowExpManager(ExpManager):
     def create_exp(self, experiment_name: Optional[Text] = None):
         assert experiment_name is not None
         # init experiment
-        experiment_id = self.client.create_experiment(experiment_name)
+        try:
+            experiment_id = self.client.create_experiment(experiment_name)
+        except MlflowException as e:
+            if e.error_code == ErrorCode.Name(RESOURCE_ALREADY_EXISTS):
+                raise ExpAlreadyExistError()
+            raise e
+
         experiment = MLflowExperiment(experiment_id, experiment_name, self.uri)
         experiment._default_name = self._default_exp_name
-
         return experiment
 
     def _get_exp(self, experiment_id=None, experiment_name=None):
