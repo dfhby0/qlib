@@ -6,10 +6,8 @@ import os
 import copy
 import math
 import json
-import collections
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 
 import torch
@@ -24,7 +22,6 @@ except ImportError:
 
 from tqdm import tqdm
 
-from qlib.utils import get_or_create_path
 from qlib.constant import EPS
 from qlib.log import get_module_logger
 from qlib.model.base import Model
@@ -170,8 +167,8 @@ class TRAModel(Model):
             for param in self.tra.predictors.parameters():
                 param.requires_grad_(False)
 
-        self.logger.info("# model params: %d" % sum([p.numel() for p in self.model.parameters() if p.requires_grad]))
-        self.logger.info("# tra params: %d" % sum([p.numel() for p in self.tra.parameters() if p.requires_grad]))
+        self.logger.info("# model params: %d" % sum(p.numel() for p in self.model.parameters() if p.requires_grad))
+        self.logger.info("# tra params: %d" % sum(p.numel() for p in self.tra.parameters() if p.requires_grad))
 
         self.optimizer = optim.Adam(list(self.model.parameters()) + list(self.tra.parameters()), lr=self.lr)
 
@@ -745,7 +742,7 @@ def evaluate(pred):
     score = pred.score
     label = pred.label
     diff = score - label
-    MSE = (diff ** 2).mean()
+    MSE = (diff**2).mean()
     MAE = (diff.abs()).mean()
     IC = score.corr(label, method="spearman")
     return {"MSE": MSE, "MAE": MAE, "IC": IC}

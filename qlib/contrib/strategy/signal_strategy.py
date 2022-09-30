@@ -3,7 +3,6 @@
 import os
 import copy
 import warnings
-import cvxpy as cp
 import numpy as np
 import pandas as pd
 
@@ -15,11 +14,10 @@ from qlib.model.base import BaseModel
 from qlib.strategy.base import BaseStrategy
 from qlib.backtest.position import Position
 from qlib.backtest.signal import Signal, create_signal_from
-from qlib.backtest.decision import Order, BaseTradeDecision, OrderDir, TradeDecisionWO
+from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
 from qlib.log import get_module_logger
 from qlib.utils import get_pre_trading_date, load_dataset
-from qlib.utils.resam import resam_ts_data
-from qlib.contrib.strategy.order_generator import OrderGenWInteract, OrderGenWOInteract
+from qlib.contrib.strategy.order_generator import OrderGenWOInteract
 from qlib.contrib.strategy.optimizer import EnhancedIndexingOptimizer
 
 
@@ -106,9 +104,9 @@ class TopkDropoutStrategy(BaseSignalStrategy):
         only_tradable : bool
             will the strategy only consider the tradable stock when buying and selling.
             if only_tradable:
-                strategy will make buy sell decision without checking the tradable state of the stock.
-            else:
                 strategy will make decision with the tradable state of the stock info and avoid buy and sell them.
+            else:
+                strategy will make buy sell decision without checking the tradable state of the stock.
         """
         super().__init__(**kwargs)
         self.topk = topk
@@ -133,10 +131,10 @@ class TopkDropoutStrategy(BaseSignalStrategy):
         if self.only_tradable:
             # If The strategy only consider tradable stock when make decision
             # It needs following actions to filter stocks
-            def get_first_n(l, n, reverse=False):
+            def get_first_n(li, n, reverse=False):
                 cur_n = 0
                 res = []
-                for si in reversed(l) if reverse else l:
+                for si in reversed(li) if reverse else li:
                     if self.trade_exchange.is_stock_tradable(
                         stock_id=si, start_time=trade_start_time, end_time=trade_end_time
                     ):
@@ -146,13 +144,13 @@ class TopkDropoutStrategy(BaseSignalStrategy):
                             break
                 return res[::-1] if reverse else res
 
-            def get_last_n(l, n):
-                return get_first_n(l, n, reverse=True)
+            def get_last_n(li, n):
+                return get_first_n(li, n, reverse=True)
 
-            def filter_stock(l):
+            def filter_stock(li):
                 return [
                     si
-                    for si in l
+                    for si in li
                     if self.trade_exchange.is_stock_tradable(
                         stock_id=si, start_time=trade_start_time, end_time=trade_end_time
                     )
@@ -160,14 +158,14 @@ class TopkDropoutStrategy(BaseSignalStrategy):
 
         else:
             # Otherwise, the stock will make decision with out the stock tradable info
-            def get_first_n(l, n):
-                return list(l)[:n]
+            def get_first_n(li, n):
+                return list(li)[:n]
 
-            def get_last_n(l, n):
-                return list(l)[-n:]
+            def get_last_n(li, n):
+                return list(li)[-n:]
 
-            def filter_stock(l):
-                return l
+            def filter_stock(li):
+                return li
 
         current_temp = copy.deepcopy(self.trade_position)
         # generate order list for this adjust date
@@ -205,7 +203,7 @@ class TopkDropoutStrategy(BaseSignalStrategy):
             candi = filter_stock(last)
             try:
                 sell = pd.Index(np.random.choice(candi, self.n_drop, replace=False) if len(last) else [])
-            except ValueError:  #  No enough candidates
+            except ValueError:  # No enough candidates
                 sell = candi
         else:
             raise NotImplementedError(f"This type of input is not supported")
@@ -224,9 +222,6 @@ class TopkDropoutStrategy(BaseSignalStrategy):
                     continue
                 # sell order
                 sell_amount = current_temp.get_stock_amount(code=code)
-                factor = self.trade_exchange.get_factor(
-                    stock_id=code, start_time=trade_start_time, end_time=trade_end_time
-                )
                 # sell_amount = self.trade_exchange.round_amount_by_trade_unit(sell_amount, factor)
                 sell_order = Order(
                     stock_id=code,
@@ -484,7 +479,7 @@ class EnhancedIndexingStrategy(WeightStrategyBase):
             r=score,
             F=factor_exp,
             cov_b=factor_cov,
-            var_u=specific_risk ** 2,
+            var_u=specific_risk**2,
             w0=cur_weight,
             wb=bench_weight,
             mfh=mask_force_hold,

@@ -13,11 +13,11 @@ from .config import C
 
 
 class MetaLogger(type):
-    def __new__(mcs, name, bases, attrs):
+    def __new__(mcs, name, bases, attrs):  # pylint: disable=C0204
         wrapper_dict = logging.Logger.__dict__.copy()
-        for key in wrapper_dict:
+        for key, val in wrapper_dict.items():
             if key not in attrs and key != "__reduce__":
-                attrs[key] = wrapper_dict[key]
+                attrs[key] = val
         return type.__new__(mcs, name, bases, attrs)
 
 
@@ -61,7 +61,11 @@ def get_module_logger(module_name, level: Optional[int] = None) -> QlibLogger:
     if level is None:
         level = C.logging_level
 
-    module_name = "qlib.{}".format(module_name)
+    if not module_name.startswith("qlib."):
+        # Add a prefix of qlib. when the requested ``module_name`` doesn't start with ``qlib.``.
+        # If the module_name is already qlib.xxx, we do not format here. Otherwise, it will become qlib.qlib.xxx.
+        module_name = "qlib.{}".format(module_name)
+
     # Get logger.
     module_logger = QlibLogger(module_name)
     module_logger.setLevel(level)
@@ -164,7 +168,7 @@ class LogFilter(logging.Filter):
         if isinstance(self.param, str):
             allow = not self.match_msg(self.param, record.msg)
         elif isinstance(self.param, list):
-            allow = not any([self.match_msg(p, record.msg) for p in self.param])
+            allow = not any(self.match_msg(p, record.msg) for p in self.param)
         return allow
 
 
@@ -201,7 +205,7 @@ def set_global_logger_level(level: int, return_orig_handler_level: bool = False)
 
     """
     _handler_level_map = {}
-    qlib_logger = logging.root.manager.loggerDict.get("qlib", None)
+    qlib_logger = logging.root.manager.loggerDict.get("qlib", None)  # pylint: disable=E1101
     if qlib_logger is not None:
         for _handler in qlib_logger.handlers:
             _handler_level_map[_handler] = _handler.level

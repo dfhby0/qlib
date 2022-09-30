@@ -1,24 +1,23 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-from copy import deepcopy
-from qlib.data.dataset.utils import init_task_handler
-from qlib.utils.data import deepcopy_basic_type
-from qlib.contrib.torch import data_to_tensor
-from qlib.workflow.task.utils import TimeAdjuster
-from qlib.model.meta.task import MetaTask
-from typing import Dict, List, Union, Text, Tuple
-from qlib.data.dataset.handler import DataHandler
-from qlib.log import get_module_logger
-from qlib.utils import auto_filter_kwargs, get_date_by_shift, init_instance_by_config
-from qlib.workflow import R
-from qlib.workflow.task.gen import RollingGen, task_generator
-from joblib import Parallel, delayed
-from qlib.model.meta.dataset import MetaTaskDataset
-from qlib.model.trainer import task_train, TrainerR
-from qlib.data.dataset import DatasetH
-from tqdm.auto import tqdm
 import pandas as pd
 import numpy as np
+from copy import deepcopy
+from joblib import Parallel, delayed  # pylint: disable=E0401
+from typing import Dict, List, Union, Text, Tuple
+from qlib.data.dataset.utils import init_task_handler
+from qlib.data.dataset import DatasetH
+from qlib.contrib.torch import data_to_tensor
+from qlib.model.meta.task import MetaTask
+from qlib.model.meta.dataset import MetaTaskDataset
+from qlib.model.trainer import TrainerR
+from qlib.log import get_module_logger
+from qlib.utils import auto_filter_kwargs, get_date_by_shift, init_instance_by_config
+from qlib.utils.data import deepcopy_basic_type
+from qlib.workflow import R
+from qlib.workflow.task.gen import RollingGen, task_generator
+from qlib.workflow.task.utils import TimeAdjuster
+from tqdm.auto import tqdm
 
 
 class InternalData:
@@ -218,7 +217,7 @@ class MetaDatasetDS(MetaTaskDataset):
         ----------
         task_tpl : Union[dict, list]
             Decide what tasks are used.
-            - dict : the task template， the prepared task is generated with `step`, `trunc_days` and `RollingGen`
+            - dict : the task template, the prepared task is generated with `step`, `trunc_days` and `RollingGen`
             - list : when list, use the list of tasks directly
                      the list is supposed to be sorted according timeline
         step : int
@@ -291,7 +290,7 @@ class MetaDatasetDS(MetaTaskDataset):
         ic_df = self.internal_data.data_ic_df
 
         segs = task["dataset"]["kwargs"]["segments"]
-        end = max([segs[k][1] for k in ("train", "valid") if k in segs])
+        end = max(segs[k][1] for k in ("train", "valid") if k in segs)
         ic_df_avail = ic_df.loc[:end, pd.IndexSlice[:, :end]]
 
         # meta data set focus on the **information** instead of preprocess

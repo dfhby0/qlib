@@ -3,7 +3,6 @@
 from __future__ import division
 from __future__ import print_function
 
-import os
 import numpy as np
 import pandas as pd
 from typing import Text, Union
@@ -54,7 +53,7 @@ class TabnetModel(Model):
         """
         TabNet model for Qlib
 
-        Args：
+        Args:
         ps: probability to generate the bernoulli mask
         """
         # set hyper-parameters.
@@ -378,7 +377,7 @@ class TabnetModel(Model):
 
     def metric_fn(self, pred, label):
         mask = torch.isfinite(label)
-        if self.metric == "" or self.metric == "loss":
+        if self.metric in ("", "loss"):
             return -self.loss_fn(pred[mask], label[mask])
         raise ValueError("unknown metric `%s`" % self.metric)
 
@@ -478,10 +477,10 @@ class TabNet(nn.Module):
         sparse_loss = []
         out = torch.zeros(x.size(0), self.n_d).to(x.device)
         for step in self.steps:
-            x_te, l = step(x, x_a, priors)
+            x_te, loss = step(x, x_a, priors)
             out += F.relu(x_te[:, : self.n_d])  # split the feature from feat_transformer
             x_a = x_te[:, self.n_d :]
-            sparse_loss.append(l)
+            sparse_loss.append(loss)
         return self.fc(out), sum(sparse_loss)
 
 

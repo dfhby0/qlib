@@ -1,16 +1,17 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import pandas as pd
 import numpy as np
 import torch
 from torch import nn
-from qlib.contrib.torch import data_to_tensor
 
 
 class ICLoss(nn.Module):
     def forward(self, pred, y, idx, skip_size=50):
         """forward.
+        FIXME:
+        - Some times it will be a slightly different from the result from `pandas.corr()`
+        - It may be caused by the precision problem of model;
 
         :param pred:
         :param y:

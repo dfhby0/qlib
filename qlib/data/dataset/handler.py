@@ -2,24 +2,16 @@
 # Licensed under the MIT License.
 
 # coding=utf-8
-import abc
-import bisect
-import logging
 import warnings
-from inspect import getfullargspec
 from typing import Callable, Union, Tuple, List, Iterator, Optional
 
 import pandas as pd
-import numpy as np
 
 from ...log import get_module_logger, TimeInspector
-from ...data import D
-from ...config import C
-from ...utils import parse_config, transform_end_date, init_instance_by_config
+from ...utils import init_instance_by_config
 from ...utils.serial import Serializable
 from .utils import fetch_df_by_index, fetch_df_by_col
 from ...utils import lazy_sort_index
-from pathlib import Path
 from .loader import DataLoader
 
 from . import processor as processor_module
@@ -228,7 +220,7 @@ class DataHandler(Serializable):
         proc_func: Callable = None,
     ):
         # This method is extracted for sharing in subclasses
-        from .storage import BaseHandlerStorage
+        from .storage import BaseHandlerStorage  # pylint: disable=C0415
 
         # Following conflictions may occurs
         # - Does [20200101", "20210101"] mean selecting this slice or these two days?
@@ -265,7 +257,7 @@ class DataHandler(Serializable):
                     selector=selector, level=level, col_set=col_set, fetch_orig=self.fetch_orig, proc_func=proc_func
                 )
         else:
-            raise TypeError(f"data_storage should be pd.DataFrame|HasingStockStorage, not {type(data_storage)}")
+            raise TypeError(f"data_storage should be pd.DataFrame|HashingStockStorage, not {type(data_storage)}")
 
         if squeeze:
             # squeeze columns
@@ -333,7 +325,18 @@ class DataHandlerLP(DataHandler):
     """
     DataHandler with **(L)earnable (P)rocessor**
 
-    Tips to improving the performance of data handler
+    This handler will produce three pieces of data in pd.DataFrame format.
+    - DK_R / self._data: the raw data loaded from the loader
+    - DK_I / self._infer: the data processed for inference
+    - DK_L / self._learn: the data processed for learning model.
+
+    The motivation of using different processor workflows for learning and inference
+    Here are some examples.
+    - The instrument universe for learning and inference may be different.
+    - The processing of some samples may rely on label (for example, some samples hit the limit may need extra processing or be dropped).
+        These processors only apply to the learning phase.
+
+    Tips to improve the performance of data handler
     - To reduce the memory cost
         - `drop_raw=True`: this will modify the data inplace on raw data;
     """
@@ -512,7 +515,7 @@ class DataHandlerLP(DataHandler):
         # data for learning
         # 1) assign
         if self.process_type == DataHandlerLP.PTYPE_I:
-            _learn_df = self._data
+            _learn_df = _shared_df
         elif self.process_type == DataHandlerLP.PTYPE_A:
             # based on `infer_df` and append the processor
             _learn_df = _infer_df
@@ -616,7 +619,6 @@ class DataHandlerLP(DataHandler):
         -------
         pd.DataFrame:
         """
-        from .storage import BaseHandlerStorage
 
         return self._fetch_data(
             data_storage=self._get_df_by_key(data_key),

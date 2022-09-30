@@ -5,7 +5,6 @@
 from __future__ import division
 from __future__ import print_function
 
-import os
 import numpy as np
 import pandas as pd
 import copy
@@ -18,7 +17,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from ...model.base import Model
-from ...data.dataset import DatasetH, TSDatasetH
 from ...data.dataset.handler import DataHandlerLP
 from ...model.utils import ConcatDataset
 from ...data.dataset.weight import Reweighter
@@ -140,7 +138,7 @@ class LSTM(Model):
         loss = weight * (pred - label) ** 2
         return torch.mean(loss)
 
-    def loss_fn(self, pred, label):
+    def loss_fn(self, pred, label, weight):
         mask = ~torch.isnan(label)
 
         if weight is None:
@@ -155,8 +153,8 @@ class LSTM(Model):
 
         mask = torch.isfinite(label)
 
-        if self.metric == "" or self.metric == "loss":
-            return -self.loss_fn(pred[mask], label[mask])
+        if self.metric in ("", "loss"):
+            return -self.loss_fn(pred[mask], label[mask], weight=None)
 
         raise ValueError("unknown metric `%s`" % self.metric)
 

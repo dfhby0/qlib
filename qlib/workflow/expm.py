@@ -6,9 +6,7 @@ import mlflow
 from filelock import FileLock
 from mlflow.exceptions import MlflowException, RESOURCE_ALREADY_EXISTS, ErrorCode
 from mlflow.entities import ViewType
-import os, logging
-from pathlib import Path
-from contextlib import contextmanager
+import os
 from typing import Optional, Text
 
 from .exp import MLflowExperiment, Experiment
@@ -29,7 +27,8 @@ class ExpManager:
     def __init__(self, uri: Text, default_exp_name: Optional[Text]):
         self._current_uri = uri
         self._default_exp_name = default_exp_name
-        self.active_experiment = None  # only one experiment can active each time
+        self.active_experiment = None  # only one experiment can be active each time
+        logger.info(f"experiment manager uri is at {self._current_uri}")
 
     def __repr__(self):
         return "{name}(current_uri={curi})".format(name=self.__class__.__name__, curi=self._current_uri)
@@ -172,12 +171,9 @@ class ExpManager:
             experiment_name = self._default_exp_name
 
         if create:
-            exp, is_new = self._get_or_create_exp(experiment_id=experiment_id, experiment_name=experiment_name)
+            exp, _ = self._get_or_create_exp(experiment_id=experiment_id, experiment_name=experiment_name)
         else:
-            exp, is_new = (
-                self._get_exp(experiment_id=experiment_id, experiment_name=experiment_name),
-                False,
-            )
+            exp = self._get_exp(experiment_id=experiment_id, experiment_name=experiment_name)
         if self.active_experiment is None and start:
             self.active_experiment = exp
             # start the recorder
@@ -203,7 +199,7 @@ class ExpManager:
             # So we supported it in the interface wrapper
             pr = urlparse(self.uri)
             if pr.scheme == "file":
-                with FileLock(os.path.join(pr.netloc, pr.path, "filelock")) as f:
+                with FileLock(os.path.join(pr.netloc, pr.path, "filelock")):  # pylint: disable=E0110
                     return self.create_exp(experiment_name), True
             # NOTE: for other schemes like http, we double check to avoid create exp conflicts
             try:
@@ -363,7 +359,7 @@ class MLflowExpManager(ExpManager):
             experiment_id = self.client.create_experiment(experiment_name)
         except MlflowException as e:
             if e.error_code == ErrorCode.Name(RESOURCE_ALREADY_EXISTS):
-                raise ExpAlreadyExistError()
+                raise ExpAlreadyExistError() from e
             raise e
 
         experiment = MLflowExperiment(experiment_id, experiment_name, self.uri)
@@ -387,10 +383,10 @@ class MLflowExpManager(ExpManager):
                     raise MlflowException("No valid experiment has been found.")
                 experiment = MLflowExperiment(exp.experiment_id, exp.name, self.uri)
                 return experiment
-            except MlflowException:
+            except MlflowException as e:
                 raise ValueError(
                     "No valid experiment has been found, please make sure the input experiment id is correct."
-                )
+                ) from e
         elif experiment_name is not None:
             try:
                 exp = self.client.get_experiment_by_name(experiment_name)
@@ -401,9 +397,9 @@ class MLflowExpManager(ExpManager):
             except MlflowException as e:
                 raise ValueError(
                     "No valid experiment has been found, please make sure the input experiment name is correct."
-                )
+                ) from e
 
-    def search_records(self, experiment_ids, **kwargs):
+    def search_records(self, experiment_ids=None, **kwargs):
         filter_string = "" if kwargs.get("filter_string") is None else kwargs.get("filter_string")
         run_view_type = 1 if kwargs.get("run_view_type") is None else kwargs.get("run_view_type")
         max_results = 100000 if kwargs.get("max_results") is None else kwargs.get("max_results")
@@ -425,7 +421,7 @@ class MLflowExpManager(ExpManager):
         except MlflowException as e:
             raise Exception(
                 f"Error: {e}. Something went wrong when deleting experiment. Please check if the name/id of the experiment is correct."
-            )
+            ) from e
 
     def list_experiments(self):
         # retrieve all the existing experiments
