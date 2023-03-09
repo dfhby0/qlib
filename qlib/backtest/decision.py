@@ -254,7 +254,7 @@ class IdxTradeRange(TradeRange):
         self._start_idx = start_idx
         self._end_idx = end_idx
 
-    def __call__(self, trade_calendar: TradeCalendarManager = None) -> Tuple[int, int]:
+    def __call__(self, trade_calendar: TradeCalendarManager | None = None) -> Tuple[int, int]:
         return self._start_idx, self._end_idx
 
     def clip_time_range(self, start_time: pd.Timestamp, end_time: pd.Timestamp) -> Tuple[pd.Timestamp, pd.Timestamp]:
@@ -301,7 +301,7 @@ class TradeRangeByTime(TradeRange):
 
 class BaseTradeDecision(Generic[DecisionType]):
     """
-    Trade decisions ara made by strategy and executed by executor
+    Trade decisions are made by strategy and executed by executor
 
     Motivation:
         Here are several typical scenarios for `BaseTradeDecision`
@@ -315,7 +315,7 @@ class BaseTradeDecision(Generic[DecisionType]):
         2. Same as `case 1.3`
     """
 
-    def __init__(self, strategy: BaseStrategy, trade_range: Union[Tuple[int, int], TradeRange] = None) -> None:
+    def __init__(self, strategy: BaseStrategy, trade_range: Union[Tuple[int, int], TradeRange, None] = None) -> None:
         """
         Parameters
         ----------
@@ -554,7 +554,7 @@ class TradeDecisionWO(BaseTradeDecision[Order]):
         self,
         order_list: List[Order],
         strategy: BaseStrategy,
-        trade_range: Union[Tuple[int, int], TradeRange] = None,
+        trade_range: Union[Tuple[int, int], TradeRange, None] = None,
     ) -> None:
         super().__init__(strategy, trade_range=trade_range)
         self.order_list = cast(List[Order], order_list)
@@ -576,3 +576,21 @@ class TradeDecisionWO(BaseTradeDecision[Order]):
             f"trade_range: {self.trade_range}; "
             f"order_list[{len(self.order_list)}]"
         )
+
+
+class TradeDecisionWithDetails(TradeDecisionWO):
+    """
+    Decision with detail information.
+    Detail information is used to generate execution reports.
+    """
+
+    def __init__(
+        self,
+        order_list: List[Order],
+        strategy: BaseStrategy,
+        trade_range: Optional[Tuple[int, int]] = None,
+        details: Optional[Any] = None,
+    ) -> None:
+        super().__init__(order_list, strategy, trade_range)
+
+        self.details = details

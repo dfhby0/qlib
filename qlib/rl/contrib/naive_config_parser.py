@@ -11,11 +11,14 @@ from importlib import import_module
 import yaml
 
 
+DELETE_KEY = "_delete_"
+
+
 def merge_a_into_b(a: dict, b: dict) -> dict:
     b = b.copy()
     for k, v in a.items():
         if isinstance(v, dict) and k in b:
-            v.pop("_delete_", False)  # TODO: make this more elegant
+            v.pop(DELETE_KEY, False)
             b[k] = merge_a_into_b(v, b[k])
         else:
             b[k] = v
@@ -53,7 +56,8 @@ def parse_backtest_config(path: str) -> dict:
 
                 del sys.modules[tmp_module_name]
             else:
-                config = yaml.safe_load(open(tmp_config_file.name))
+                with open(tmp_config_file.name) as input_stream:
+                    config = yaml.safe_load(input_stream)
 
     if "_base_" in config:
         base_file_name = config.pop("_base_")
@@ -85,7 +89,6 @@ def get_backtest_config_fromfile(path: str) -> dict:
         "min_cost": 5.0,
         "trade_unit": 100.0,
         "cash_limit": None,
-        "generate_report": False,
     }
     backtest_config["exchange"] = merge_a_into_b(a=backtest_config["exchange"], b=exchange_config_default)
     backtest_config["exchange"] = _convert_all_list_to_tuple(backtest_config["exchange"])
@@ -95,8 +98,8 @@ def get_backtest_config_fromfile(path: str) -> dict:
         "debug_single_day": None,
         "concurrency": -1,
         "multiplier": 1.0,
-        "output_dir": "outputs/",
-        # "runtime": {},
+        "output_dir": "outputs_backtest/",
+        "generate_report": False,
     }
     backtest_config = merge_a_into_b(a=backtest_config, b=backtest_config_default)
 

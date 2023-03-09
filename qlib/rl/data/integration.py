@@ -49,7 +49,7 @@ class DataWrapper:
         return dataset.handler.fetch(pd.IndexSlice[stock_id, start_time:end_time], level=None)
 
 
-def init_qlib(qlib_config: dict, part: str = None) -> None:
+def init_qlib(qlib_config: dict, part: str | None = None) -> None:
     """Initialize necessary resource to launch the workflow, including data direction, feature columns, etc..
 
     Parameters
@@ -81,10 +81,11 @@ def init_qlib(qlib_config: dict, part: str = None) -> None:
     def _convert_to_path(path: str | Path) -> Path:
         return path if isinstance(path, Path) else Path(path)
 
-    provider_uri_map = {
-        "day": _convert_to_path(qlib_config["provider_uri_day"]).as_posix(),
-        "1min": _convert_to_path(qlib_config["provider_uri_1min"]).as_posix(),
-    }
+    provider_uri_map = {}
+    for granularity in ["1min", "5min", "day"]:
+        if f"provider_uri_{granularity}" in qlib_config:
+            provider_uri_map[f"{granularity}"] = _convert_to_path(qlib_config[f"provider_uri_{granularity}"]).as_posix()
+
     qlib.init(
         region=REG_CN,
         auto_mount=False,

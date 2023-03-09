@@ -9,9 +9,7 @@ import pandas as pd
 
 from qlib.backtest import Exchange, Order
 from qlib.backtest.decision import TradeRange, TradeRangeByTime
-from qlib.constant import EPS_T, ONE_DAY
 from qlib.rl.order_execution.utils import get_ticks_slice
-from qlib.utils.index_data import IndexData
 
 from .base import BaseIntradayBacktestData, BaseIntradayProcessedData, ProcessedDataProvider
 from .integration import fetch_features
@@ -82,18 +80,10 @@ def load_backtest_data(
     trade_exchange: Exchange,
     trade_range: TradeRange,
 ) -> IntradayBacktestData:
-    data = cast(
-        IndexData,
-        trade_exchange.get_deal_price(
-            stock_id=order.stock_id,
-            start_time=order.date,
-            end_time=order.date + ONE_DAY - EPS_T,
-            direction=order.direction,
-            method=None,
-        ),
-    )
+    ticks_index = pd.DatetimeIndex(trade_exchange.quote_df.reset_index()["datetime"])
+    ticks_index = ticks_index[order.start_time <= ticks_index]
+    ticks_index = ticks_index[ticks_index <= order.end_time]
 
-    ticks_index = pd.DatetimeIndex(data.index)
     if isinstance(trade_range, TradeRangeByTime):
         ticks_for_order = get_ticks_slice(
             ticks_index,
@@ -122,7 +112,10 @@ class NTIntradayProcessedData(BaseIntradayProcessedData):
         date: pd.Timestamp,
     ) -> None:
         def _drop_stock_id(df: pd.DataFrame) -> pd.DataFrame:
-            return df.reset_index().drop(columns=["instrument"]).set_index(["datetime"])
+            df = df.reset_index()
+            if "instrument" in df.columns:
+                df = df.drop(columns=["instrument"])
+            return df.set_index(["datetime"])
 
         self.today = _drop_stock_id(fetch_features(stock_id, date))
         self.yesterday = _drop_stock_id(fetch_features(stock_id, date, yesterday=True))
